@@ -1411,6 +1411,10 @@
 
     <button id="voiceStopBtn" class="voice-btn" title="Stop listening" style="background:#f1f1f1;color:#333;border:1px solid #ccc;">Stop</button>
     <button id="voiceClearBtn" class="voice-btn" title="Clear last transcript" style="background:#fff4f4;color:#b71c1c;border:1px solid #ffb3b3;">Clear</button>
+    <button id="voiceBackspaceBtn" class="voice-btn" title="Clear last word" style="background:#fffbe6;color:#8a6d3b;border:1px solid #ffe58f;">
+Clear word
+
+</button>
 
     <div id="voiceStatus" class="voice-status" aria-live="polite">Idle</div>
     <div id="voiceConfidence" class="voice-confidence" aria-hidden="true" style="display:none">0%</div>
@@ -4790,6 +4794,43 @@ if (typeof addSubBtn !== 'undefined' && addSubBtn) {
     // Keep currentSessionText intact when manually stopping
   }
 
+  // Helper: remove the last word (Unicode-aware, with fallback)
+function deleteLastWord(text) {
+if (!text) return '';
+// Try Intl.Segmenter for better word splits (works well for English/Hindi)
+if (window.Intl && window.Intl.Segmenter) {
+try {
+const seg = new Intl.Segmenter(undefined, { granularity: 'word' });
+const parts = Array.from(seg.segment(text));
+// Remove trailing non-word (spaces/punct)
+while (parts.length && parts[parts.length - 1].isWordLike === false) parts.pop();
+// Remove one word
+if (parts.length) parts.pop();
+// Rebuild string and trim trailing spaces
+return parts.map(p => p.segment).join('').replace(/\s+$/u, '');
+} catch {}
+}
+// Fallback: trim end, then strip last token
+return text
+.replace(/\s+$/u, '')
+.replace(/[\p{L}\p{N}\p{M}\p{Pc}\p{Pd}]+[^\S\r\n]*$/u, '')
+.replace(/[^\S\r\n]+$/u, '');
+}
+
+const voiceBackspaceBtn = document.getElementById('voiceBackspaceBtn');
+if (voiceBackspaceBtn && otherInfo) {
+voiceBackspaceBtn.addEventListener('click', (e) => {
+e.preventDefault();
+const next = deleteLastWord(otherInfo.value || '');
+otherInfo.value = next;
+// Keep caret at end and focus
+otherInfo.focus();
+try { otherInfo.setSelectionRange(otherInfo.value.length, otherInfo.value.length); } catch(e){}
+// If your voice code tracks session text, sync it (safe no-op if undefined)
+if (typeof currentSessionText !== 'undefined') currentSessionText = otherInfo.value;
+});
+}
+
   function clearTranscript() {
     // CRITICAL: Clear everything and reset session
     currentSessionText = '';
@@ -4899,6 +4940,7 @@ if (typeof addSubBtn !== 'undefined' && addSubBtn) {
 
 </body>
 </html>
+
 
 
 
