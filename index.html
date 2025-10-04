@@ -2965,41 +2965,7 @@ Clear word
         document.querySelectorAll('input[name="modeOfPayment"]').forEach(bindModeToggle);
       }
 
-      // Save server
-      saveServerBtn.addEventListener('click', async function() {
-        const cfg = buildConfigObject();
-        
-        try {
-          saveServerBtn.disabled = true;
-          saveServerBtn.textContent = 'Saving...';
-          
-          const submitData = {
-            action: 'saveConfig',
-            token: SERVER_TOKEN,
-            config: JSON.stringify(cfg)
-          };
-          
-          const url = SERVER_ENDPOINT + '?' + Object.keys(submitData).map(k => 
-            encodeURIComponent(k) + '=' + encodeURIComponent(submitData[k])
-          ).join('&');
-          
-          const response = await jsonpCall(url, 30000);
-          
-          if (response && response.success) {
-            alert('Configuration saved successfully!');
-            setCustomizeMode(false);
-          } else {
-            throw new Error(response ? response.error || 'Unknown server error' : 'No response from server');
-          }
-          
-        } catch (error) {
-          console.error('Save error:', error);
-          alert('Failed to save configuration: ' + error.message);
-        } finally {
-          saveServerBtn.disabled = false;
-          saveServerBtn.textContent = 'Save (server)';
-        }
-      });
+     
 
       const purchasedFromSelect = document.getElementById('purchasedFromSelect');
       const purchasedFromText = document.getElementById('purchasedFrom');
@@ -5109,6 +5075,7 @@ if (typeof addSubBtn !== 'undefined' && addSubBtn) {
 
 </body>
 </html>
+
 
 
 
