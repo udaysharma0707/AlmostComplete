@@ -4632,7 +4632,7 @@ if (typeof addSubBtn !== 'undefined' && addSubBtn) {
 
 
 
-/* Voice-to-Text functionality - FIXED: Always starts fresh, never restores old text */
+/* Voice-to-Text functionality - FIXED: Uses textbox as truth, preserves typed edits on restart */
 (function(){
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   const voiceBtn = document.getElementById('voiceBtn');
@@ -4650,10 +4650,10 @@ if (typeof addSubBtn !== 'undefined' && addSubBtn) {
   }
 
   if (!SpeechRecognition) {
-    voiceStatus.textContent = 'SpeechRecognition not supported';
-    voiceBtn.disabled = true;
-    voiceStopBtn.disabled = true;
-    voiceBtn.addEventListener('click', () => {
+    if (voiceStatus) voiceStatus.textContent = 'SpeechRecognition not supported';
+    if (voiceBtn) voiceBtn.disabled = true;
+    if (voiceStopBtn) voiceStopBtn.disabled = true;
+    voiceBtn && voiceBtn.addEventListener('click', () => {
       alert('Browser does not support Web Speech API. Use Chrome/Edge/Safari.');
     });
     return;
@@ -4671,7 +4671,8 @@ if (typeof addSubBtn !== 'undefined' && addSubBtn) {
 
   let recognition = null;
   let listening = false;
-  let currentSessionText = ''; // Only for current voice session
+  // currentSessionText is the single source-of-truth for "committed" content.
+  let currentSessionText = ''; // Starts empty on page load (your load handler may clear it).
 
   function createRecognition() {
     const r = new SpeechRecognition();
@@ -4684,42 +4685,41 @@ if (typeof addSubBtn !== 'undefined' && addSubBtn) {
 
   function updateUIListening(isListening) {
     listening = !!isListening;
-    voiceBtn.setAttribute('aria-pressed', listening ? 'true' : 'false');
-    voiceBtn.classList.toggle('listening', listening);
-    voiceBtnLabel.textContent = listening ? 'Listening…' : 'Start voice';
-    voiceStatus.textContent = listening ? 'Listening — speak now' : 'Ready';
-    voiceStopBtn.disabled = !listening;
+    voiceBtn && voiceBtn.setAttribute('aria-pressed', listening ? 'true' : 'false');
+    voiceBtn && voiceBtn.classList.toggle('listening', listening);
+    if (voiceBtnLabel) voiceBtnLabel.textContent = listening ? 'Listening…' : 'Start voice';
+    if (voiceStatus) voiceStatus.textContent = listening ? 'Listening — speak now' : 'Ready';
+    if (voiceStopBtn) voiceStopBtn.disabled = !listening;
   }
 
   function startListening() {
     if (listening) return;
-    
-    // CRITICAL: Always start with empty text - never restore old content
-    currentSessionText = '';
-    if (otherInfo) {
-      otherInfo.value = '';
-    }
+
+    // CRITICAL CHANGE: Do NOT clear currentSessionText or otherInfo.value.
+    // Instead, treat whatever is currently in the textbox as the starting committed text.
+    currentSessionText = otherInfo ? otherInfo.value || '' : '';
 
     try {
       recognition = createRecognition();
-      
+
       recognition.onstart = () => {
         updateUIListening(true);
-        voiceConfidence.style.display = 'none';
+        if (voiceConfidence) voiceConfidence.style.display = 'none';
       };
 
       recognition.onerror = (evt) => {
         console.error('recognition error', evt);
         if (evt.error === 'not-allowed' || evt.error === 'permission-denied') {
-          voiceStatus.textContent = 'Microphone permission denied';
+          if (voiceStatus) voiceStatus.textContent = 'Microphone permission denied';
         } else {
-          voiceStatus.textContent = 'Error: ' + (evt.error || 'unknown');
+          if (voiceStatus) voiceStatus.textContent = 'Error: ' + (evt.error || 'unknown');
         }
         updateUIListening(false);
-        recognition && recognition.stop();
+        try { recognition && recognition.stop(); } catch(e) {}
       };
 
       recognition.onend = () => {
+        // keep currentSessionText intact — do not clear it
         updateUIListening(false);
       };
 
@@ -4732,7 +4732,7 @@ if (typeof addSubBtn !== 'undefined' && addSubBtn) {
           const res = event.results[i];
           const text = res[0].transcript;
           lastConf = res[0].confidence || lastConf;
-          
+
           if (res.isFinal) {
             finalTranscript += text;
           } else {
@@ -4740,45 +4740,54 @@ if (typeof addSubBtn !== 'undefined' && addSubBtn) {
           }
         }
 
-        // FIXED: Replace entire value with current session text + interim
+        // Show committed text + interim (interim is only the live portion)
         if (interim) {
-          if (otherInfo) {
-            // Show current final + interim (no old text)
-            otherInfo.value = (currentSessionText ? (currentSessionText + ' ') : '') + interim;
-          }
+          // Build a clean display: committed text, optional space, then interim
+          const base = currentSessionText ? String(currentSessionText).trim() : '';
+          otherInfo && (otherInfo.value = base ? (base + ' ' + interim) : interim);
         }
 
-        // Commit final text to current session
+        // Commit final transcript to the session text
         if (finalTranscript) {
-          currentSessionText = (currentSessionText ? (currentSessionText + ' ') : '') + finalTranscript.trim();
-          if (otherInfo) {
-            otherInfo.value = currentSessionText; // Only current session text
-          }
-          
-          voiceConfidence.style.display = 'inline-block';
-          voiceConfidence.textContent = Math.round(lastConf * 100) + '%';
+          finalTranscript = finalTranscript.trim();
+          if (finalTranscript) {
+            // Append final text to currentSessionText with a single separating space if needed
+            currentSessionText = currentSessionText ? (currentSessionText.trim() + ' ' + finalTranscript) : finalTranscript;
+            otherInfo && (otherInfo.value = currentSessionText);
 
-          // Voice command: stop recording
-          if (finalTranscript.toLowerCase().includes('stop recording')) {
-            stopListening();
-            if (otherInfo) {
-              otherInfo.value = otherInfo.value.replace(/stop recording/ig, '').trim();
+            if (voiceConfidence) {
+              voiceConfidence.style.display = 'inline-block';
+              voiceConfidence.textContent = Math.round(lastConf * 100) + '%';
+            }
+
+            // Voice command: stop recording (remove wording and stop)
+            if (finalTranscript.toLowerCase().includes('stop recording')) {
+              // remove the phrase from the visible text and committed session
+              if (otherInfo) {
+                const cleaned = otherInfo.value.replace(/stop recording/ig, '').trim();
+                otherInfo.value = cleaned;
+                currentSessionText = cleaned;
+              } else {
+                currentSessionText = currentSessionText.replace(/stop recording/ig, '').trim();
+              }
+              stopListening();
             }
           }
         }
 
         // Stop after first final result if not continuous
-        if (!voiceContinuousCheckbox.checked && event.results[event.results.length - 1].isFinal) {
-          recognition.stop();
+        const lastIsFinal = event.results && event.results[event.results.length - 1] && event.results[event.results.length - 1].isFinal;
+        if (!voiceContinuousCheckbox.checked && lastIsFinal) {
+          try { recognition.stop(); } catch(e) {}
           updateUIListening(false);
         }
       };
 
       recognition.start();
-      voiceStatus.textContent = 'Starting...';
+      if (voiceStatus) voiceStatus.textContent = 'Starting...';
     } catch (err) {
       console.error('startListening error', err);
-      voiceStatus.textContent = 'Start failed: ' + (err.message || err);
+      if (voiceStatus) voiceStatus.textContent = 'Start failed: ' + (err.message || err);
       updateUIListening(false);
     }
   }
@@ -4791,45 +4800,45 @@ if (typeof addSubBtn !== 'undefined' && addSubBtn) {
       } catch (e) { /* ignore */ }
     }
     updateUIListening(false);
-    // Keep currentSessionText intact when manually stopping
+    // keep currentSessionText as-is
   }
 
   // Helper: remove the last word (Unicode-aware, with fallback)
-function deleteLastWord(text) {
-if (!text) return '';
-// Try Intl.Segmenter for better word splits (works well for English/Hindi)
-if (window.Intl && window.Intl.Segmenter) {
-try {
-const seg = new Intl.Segmenter(undefined, { granularity: 'word' });
-const parts = Array.from(seg.segment(text));
-// Remove trailing non-word (spaces/punct)
-while (parts.length && parts[parts.length - 1].isWordLike === false) parts.pop();
-// Remove one word
-if (parts.length) parts.pop();
-// Rebuild string and trim trailing spaces
-return parts.map(p => p.segment).join('').replace(/\s+$/u, '');
-} catch {}
-}
-// Fallback: trim end, then strip last token
-return text
-.replace(/\s+$/u, '')
-.replace(/[\p{L}\p{N}\p{M}\p{Pc}\p{Pd}]+[^\S\r\n]*$/u, '')
-.replace(/[^\S\r\n]+$/u, '');
-}
+  function deleteLastWord(text) {
+    if (!text) return '';
+    // Try Intl.Segmenter for better word splits
+    if (window.Intl && window.Intl.Segmenter) {
+      try {
+        const seg = new Intl.Segmenter(undefined, { granularity: 'word' });
+        const parts = Array.from(seg.segment(text));
+        // Remove trailing non-word (spaces/punct)
+        while (parts.length && parts[parts.length - 1].isWordLike === false) parts.pop();
+        // Remove one word
+        if (parts.length) parts.pop();
+        // Rebuild string and trim trailing spaces
+        return parts.map(p => p.segment).join('').replace(/\s+$/u, '');
+      } catch {}
+    }
+    // Fallback: trim end, then strip last token
+    return text
+      .replace(/\s+$/u, '')
+      .replace(/[\p{L}\p{N}\p{M}\p{Pc}\p{Pd}]+[^\S\r\n]*$/u, '')
+      .replace(/[^\S\r\n]+$/u, '');
+  }
 
-const voiceBackspaceBtn = document.getElementById('voiceBackspaceBtn');
-if (voiceBackspaceBtn && otherInfo) {
-voiceBackspaceBtn.addEventListener('click', (e) => {
-e.preventDefault();
-const next = deleteLastWord(otherInfo.value || '');
-otherInfo.value = next;
-// Keep caret at end and focus
-otherInfo.focus();
-try { otherInfo.setSelectionRange(otherInfo.value.length, otherInfo.value.length); } catch(e){}
-// If your voice code tracks session text, sync it (safe no-op if undefined)
-if (typeof currentSessionText !== 'undefined') currentSessionText = otherInfo.value;
-});
-}
+  const voiceBackspaceBtn = document.getElementById('voiceBackspaceBtn');
+  if (voiceBackspaceBtn && otherInfo) {
+    voiceBackspaceBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      const next = deleteLastWord(otherInfo.value || '');
+      otherInfo.value = next;
+      // Keep caret at end and focus
+      otherInfo.focus();
+      try { otherInfo.setSelectionRange(otherInfo.value.length, otherInfo.value.length); } catch(e){}
+      // Sync committed session text so recognition does not restore removed words
+      currentSessionText = otherInfo.value;
+    });
+  }
 
   function clearTranscript() {
     // CRITICAL: Clear everything and reset session
@@ -4838,8 +4847,8 @@ if (typeof currentSessionText !== 'undefined') currentSessionText = otherInfo.va
       otherInfo.value = '';
       otherInfo.blur(); // Remove focus to prevent auto-restore
     }
-    voiceConfidence.style.display = 'none';
-    voiceStatus.textContent = 'Cleared';
+    if (voiceConfidence) voiceConfidence.style.display = 'none';
+    if (voiceStatus) voiceStatus.textContent = 'Cleared';
   }
 
   // Bind UI
@@ -4883,7 +4892,7 @@ if (typeof currentSessionText !== 'undefined') currentSessionText = otherInfo.va
     }
   });
 
-  // CRITICAL: Clear text on form submit to prevent restoration
+  // CRITICAL: Clear text on form submit to prevent restoration (keeps previous behaviour)
   if (otherInfo && otherInfo.form) {
     otherInfo.form.addEventListener('submit', function() {
       setTimeout(() => {
@@ -4896,7 +4905,7 @@ if (typeof currentSessionText !== 'undefined') currentSessionText = otherInfo.va
     });
   }
 
-  // CRITICAL: Clear on page load/reload to prevent browser restoration
+  // CRITICAL: Clear on page load/reload to prevent browser restoration (keeps previous behaviour)
   window.addEventListener('load', () => {
     if (otherInfo) {
       otherInfo.value = '';
@@ -4912,6 +4921,12 @@ if (typeof currentSessionText !== 'undefined') currentSessionText = otherInfo.va
         this.value = '';
       }
     });
+
+    // IMPORTANT: keep the committed session text in sync with manual typing
+    otherInfo.addEventListener('input', function() {
+      // When user types manually, make that the source-of-truth for future speech appends.
+      currentSessionText = this.value;
+    });
   }
 
   window.addEventListener('beforeunload', () => {
@@ -4924,9 +4939,10 @@ if (typeof currentSessionText !== 'undefined') currentSessionText = otherInfo.va
     }
   });
 
-  voiceStatus.textContent = 'Ready';
-  voiceStopBtn.disabled = true;
+  if (voiceStatus) voiceStatus.textContent = 'Ready';
+  if (voiceStopBtn) voiceStopBtn.disabled = true;
 })();
+
 
 
 
@@ -4940,6 +4956,7 @@ if (typeof currentSessionText !== 'undefined') currentSessionText = otherInfo.va
 
 </body>
 </html>
+
 
 
 
