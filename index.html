@@ -4627,11 +4627,9 @@ if (typeof addSubBtn !== 'undefined' && addSubBtn) {
 }
 
 
-/* Voice-to-Text functionality using Web Speech API (vanilla JS) */
-/* Paste this block near the end of index.html (before </body>) */
-
+<script>
+/* Voice-to-Text functionality - FIXED: Always starts fresh, never restores old text */
 (function(){
-  // cross-browser SpeechRecognition
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   const voiceBtn = document.getElementById('voiceBtn');
   const voiceBtnLabel = document.getElementById('voiceBtnLabel');
@@ -4641,36 +4639,42 @@ if (typeof addSubBtn !== 'undefined' && addSubBtn) {
   const voiceContinuousCheckbox = document.getElementById('voiceContinuous');
   const voiceStatus = document.getElementById('voiceStatus');
   const voiceConfidence = document.getElementById('voiceConfidence');
-  const otherInfo = document.getElementById('otherInfo'); // target textarea
+  const otherInfo = document.getElementById('otherInfo');
 
   if (!otherInfo) {
-    console.warn('Voice-to-text: target #otherInfo not found (check where you pasted the HTML).');
+    console.warn('Voice-to-text: target #otherInfo not found');
   }
 
   if (!SpeechRecognition) {
-    // Unsupported
-    voiceStatus.textContent = 'SpeechRecognition not supported in this browser';
+    voiceStatus.textContent = 'SpeechRecognition not supported';
     voiceBtn.disabled = true;
     voiceStopBtn.disabled = true;
-    voiceClearBtn.disabled = false;
-    // Show an alert on click explaining fallback
     voiceBtn.addEventListener('click', () => {
-      alert('Sorry — your browser does not support the Web Speech API. Use Chrome/Edge (Chromium) or Safari (if available) for voice input.');
+      alert('Browser does not support Web Speech API. Use Chrome/Edge/Safari.');
     });
     return;
   }
 
+  // CRITICAL: Disable autocomplete and form restoration
+  if (otherInfo) {
+    otherInfo.setAttribute('autocomplete', 'off');
+    otherInfo.setAttribute('autocorrect', 'off');
+    otherInfo.setAttribute('autocapitalize', 'off');
+    otherInfo.setAttribute('spellcheck', 'false');
+    // Prevent browser from restoring value on back/forward
+    otherInfo.form && otherInfo.form.setAttribute('autocomplete', 'off');
+  }
+
   let recognition = null;
   let listening = false;
-  let lastInterim = '';
-  let lastFinal = '';
+  let currentSessionText = ''; // Only for current voice session
 
   function createRecognition() {
     const r = new SpeechRecognition();
     r.lang = voiceLangSelect.value || 'en-US';
-    r.interimResults = true; // show interim results
+    r.interimResults = true;
     r.maxAlternatives = 3;
-    r.continuous = !!voiceContinuousCheckbox.checked; // continuous vs single
+    r.continuous = !!voiceContinuousCheckbox.checked;
     return r;
   }
 
@@ -4679,16 +4683,22 @@ if (typeof addSubBtn !== 'undefined' && addSubBtn) {
     voiceBtn.setAttribute('aria-pressed', listening ? 'true' : 'false');
     voiceBtn.classList.toggle('listening', listening);
     voiceBtnLabel.textContent = listening ? 'Listening…' : 'Start voice';
-    voiceStatus.textContent = listening ? 'Listening — speak now' : 'Idle';
-    // Make Stop button available only while listening
+    voiceStatus.textContent = listening ? 'Listening — speak now' : 'Ready';
     voiceStopBtn.disabled = !listening;
   }
 
   function startListening() {
     if (listening) return;
+    
+    // CRITICAL: Always start with empty text - never restore old content
+    currentSessionText = '';
+    if (otherInfo) {
+      otherInfo.value = '';
+    }
+
     try {
       recognition = createRecognition();
-
+      
       recognition.onstart = () => {
         updateUIListening(true);
         voiceConfidence.style.display = 'none';
@@ -4697,7 +4707,7 @@ if (typeof addSubBtn !== 'undefined' && addSubBtn) {
       recognition.onerror = (evt) => {
         console.error('recognition error', evt);
         if (evt.error === 'not-allowed' || evt.error === 'permission-denied') {
-          voiceStatus.textContent = 'Microphone permission denied. Please allow access.';
+          voiceStatus.textContent = 'Microphone permission denied';
         } else {
           voiceStatus.textContent = 'Error: ' + (evt.error || 'unknown');
         }
@@ -4706,12 +4716,10 @@ if (typeof addSubBtn !== 'undefined' && addSubBtn) {
       };
 
       recognition.onend = () => {
-        // If continuous = true, onend may fire between interim, so only mark idle when not listening
         updateUIListening(false);
       };
 
       recognition.onresult = (event) => {
-        // event.results is a ResultList; iterate to get final vs interim
         let interim = '';
         let finalTranscript = '';
         let lastConf = 0;
@@ -4720,6 +4728,7 @@ if (typeof addSubBtn !== 'undefined' && addSubBtn) {
           const res = event.results[i];
           const text = res[0].transcript;
           lastConf = res[0].confidence || lastConf;
+          
           if (res.isFinal) {
             finalTranscript += text;
           } else {
@@ -4727,35 +4736,34 @@ if (typeof addSubBtn !== 'undefined' && addSubBtn) {
           }
         }
 
-        // Show interim while speaking
+        // FIXED: Replace entire value with current session text + interim
         if (interim) {
-          lastInterim = interim;
           if (otherInfo) {
-            // Append interim visually but don't overwrite confirmed final text
-            otherInfo.value = (lastFinal ? (lastFinal + ' ') : '') + interim;
+            // Show current final + interim (no old text)
+            otherInfo.value = (currentSessionText ? (currentSessionText + ' ') : '') + interim;
           }
         }
 
-        // Commit final text
+        // Commit final text to current session
         if (finalTranscript) {
-          lastFinal = (lastFinal ? (lastFinal + ' ') : '') + finalTranscript.trim();
+          currentSessionText = (currentSessionText ? (currentSessionText + ' ') : '') + finalTranscript.trim();
           if (otherInfo) {
-            otherInfo.value = lastFinal;
+            otherInfo.value = currentSessionText; // Only current session text
           }
-          // Show confidence for the most recent final result
+          
           voiceConfidence.style.display = 'inline-block';
           voiceConfidence.textContent = Math.round(lastConf * 100) + '%';
-          // voice command: stop recording
+
+          // Voice command: stop recording
           if (finalTranscript.toLowerCase().includes('stop recording')) {
             stopListening();
-            // remove the spoken command phrase from the transcription
             if (otherInfo) {
               otherInfo.value = otherInfo.value.replace(/stop recording/ig, '').trim();
             }
           }
         }
 
-        // If not continuous and we got a final result, stop
+        // Stop after first final result if not continuous
         if (!voiceContinuousCheckbox.checked && event.results[event.results.length - 1].isFinal) {
           recognition.stop();
           updateUIListening(false);
@@ -4779,12 +4787,16 @@ if (typeof addSubBtn !== 'undefined' && addSubBtn) {
       } catch (e) { /* ignore */ }
     }
     updateUIListening(false);
+    // Keep currentSessionText intact when manually stopping
   }
 
   function clearTranscript() {
-    lastInterim = '';
-    lastFinal = '';
-    if (otherInfo) otherInfo.value = '';
+    // CRITICAL: Clear everything and reset session
+    currentSessionText = '';
+    if (otherInfo) {
+      otherInfo.value = '';
+      otherInfo.blur(); // Remove focus to prevent auto-restore
+    }
     voiceConfidence.style.display = 'none';
     voiceStatus.textContent = 'Cleared';
   }
@@ -4792,8 +4804,11 @@ if (typeof addSubBtn !== 'undefined' && addSubBtn) {
   // Bind UI
   voiceBtn.addEventListener('click', function(e){
     e.preventDefault();
-    if (!listening) startListening();
-    else stopListening();
+    if (!listening) {
+      startListening();
+    } else {
+      stopListening();
+    }
   });
 
   voiceStopBtn.addEventListener('click', function(e){
@@ -4807,7 +4822,6 @@ if (typeof addSubBtn !== 'undefined' && addSubBtn) {
   });
 
   voiceLangSelect.addEventListener('change', function(){
-    // If currently listening restart recognition with new language
     if (listening) {
       stopListening();
       setTimeout(startListening, 250);
@@ -4816,13 +4830,11 @@ if (typeof addSubBtn !== 'undefined' && addSubBtn) {
 
   voiceContinuousCheckbox.addEventListener('change', function(){
     if (listening) {
-      // restart recognition to apply new continuous flag
       stopListening();
       setTimeout(startListening, 250);
     }
   });
 
-  // Keyboard accessibility: press Enter on mic button
   voiceBtn.addEventListener('keydown', (ev) => {
     if (ev.key === 'Enter' || ev.key === ' ') {
       ev.preventDefault();
@@ -4830,18 +4842,52 @@ if (typeof addSubBtn !== 'undefined' && addSubBtn) {
     }
   });
 
-  // On page unload, stop recognition to cleanup resources
+  // CRITICAL: Clear text on form submit to prevent restoration
+  if (otherInfo && otherInfo.form) {
+    otherInfo.form.addEventListener('submit', function() {
+      setTimeout(() => {
+        currentSessionText = '';
+        if (otherInfo) {
+          otherInfo.value = '';
+          otherInfo.blur();
+        }
+      }, 100);
+    });
+  }
+
+  // CRITICAL: Clear on page load/reload to prevent browser restoration
+  window.addEventListener('load', () => {
+    if (otherInfo) {
+      otherInfo.value = '';
+      currentSessionText = '';
+    }
+  });
+
+  // CRITICAL: Prevent focus from restoring old values
+  if (otherInfo) {
+    otherInfo.addEventListener('focus', function() {
+      // If not currently listening and field is empty, keep it empty
+      if (!listening && !currentSessionText) {
+        this.value = '';
+      }
+    });
+  }
+
   window.addEventListener('beforeunload', () => {
     if (recognition && listening) {
       try { recognition.abort(); } catch(e) {}
     }
+    // Don't save any draft
+    if (otherInfo) {
+      otherInfo.value = '';
+    }
   });
 
-  // Announce readiness
   voiceStatus.textContent = 'Ready';
   voiceStopBtn.disabled = true;
-
 })();
+</script>
+
 
 
 
@@ -4853,6 +4899,7 @@ if (typeof addSubBtn !== 'undefined' && addSubBtn) {
 
 </body>
 </html>
+
 
 
 
